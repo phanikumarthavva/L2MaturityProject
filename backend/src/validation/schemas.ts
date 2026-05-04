@@ -6,8 +6,19 @@ export const registerSchema = z.object({
   name: z.string().min(1).max(120),
 });
 
+/** Maps login id `superadmin` to the canonical default admin email. */
+export function normalizeLoginEmail(raw: string): string {
+  const t = raw.trim().toLowerCase();
+  if (t === "superadmin") return "superadmin@prm.local";
+  return t;
+}
+
 export const loginSchema = z.object({
-  email: z.string().email(),
+  email: z
+    .string()
+    .min(1)
+    .transform((s) => normalizeLoginEmail(s))
+    .pipe(z.string().email()),
   password: z.string().min(1),
 });
 

@@ -29,15 +29,21 @@ export function Login(): React.ReactElement {
       <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900/50 p-8 shadow-xl">
         <h1 className="text-2xl font-semibold text-white">Sign in</h1>
         <p className="mt-1 text-sm text-slate-400">Enterprise Project &amp; Resource Management</p>
+        <p className="mt-2 rounded-md border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-xs text-slate-500">
+          Default account: <span className="text-slate-300">superadmin</span> /{" "}
+          <span className="text-slate-300">superadmin</span> (or email{" "}
+          <span className="text-slate-300">superadmin@prm.local</span>)
+        </p>
         <form className="mt-6 space-y-4" onSubmit={(e) => void onSubmit(e)}>
           <div>
             <label className="block text-sm text-slate-400" htmlFor="email">
-              Email
+              Email or username
             </label>
             <input
               id="email"
-              type="email"
+              type="text"
               autoComplete="username"
+              placeholder="superadmin"
               className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-white outline-none ring-emerald-500/30 focus:ring-2"
               value={email}
               onChange={(e) => setEmail(e.target.value)}

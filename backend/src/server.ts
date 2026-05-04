@@ -4,6 +4,7 @@ import { loadEnv } from "./config/env.js";
 import { createApp } from "./app.js";
 import { User } from "./models/User.js";
 import { hashPassword } from "./lib/password.js";
+import { ensureDefaultSuperAdmin } from "./services/defaultSuperAdmin.js";
 import { logger } from "./utils/logger.js";
 
 async function maybeSeedAdmin(): Promise<void> {
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
   await mongoose.connect(env.MONGO_URI);
   logger.info("Connected to MongoDB");
   await maybeSeedAdmin();
+  await ensureDefaultSuperAdmin();
   const app = createApp(env);
   app.listen(env.PORT, () => {
     logger.info({ port: env.PORT }, "API listening");

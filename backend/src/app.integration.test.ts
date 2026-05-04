@@ -6,6 +6,7 @@ import { createApp } from "./app.js";
 import type { Env } from "./config/env.js";
 import { User } from "./models/User.js";
 import { hashPassword } from "./lib/password.js";
+import { ensureDefaultSuperAdmin } from "./services/defaultSuperAdmin.js";
 
 let mongo: MongoMemoryServer | undefined;
 let app: ReturnType<typeof createApp>;
@@ -20,9 +21,12 @@ const testEnv: Env = {
 };
 
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await MongoMemoryServer.create({
+    instance: { launchTimeout: 120000 },
+  });
   testEnv.MONGO_URI = mongo.getUri();
   await mongoose.connect(testEnv.MONGO_URI);
+  await ensureDefaultSuperAdmin();
   app = createApp(testEnv);
 });
 
@@ -32,6 +36,19 @@ afterAll(async () => {
 });
 
 describe("Auth and RBAC", () => {
+  it("logs in as default superadmin with username or email", async () => {
+    const asUser = await request(app)
+      .post("/api/v1/auth/login")
+      .send({ email: "superadmin", password: "superadmin" });
+    expect(asUser.status).toBe(200);
+    expect(asUser.body.user.role).toBe("admin");
+
+    const asEmail = await request(app)
+      .post("/api/v1/auth/login")
+      .send({ email: "superadmin@prm.local", password: "superadmin" });
+    expect(asEmail.status).toBe(200);
+  });
+
   it("registers and logs in", async () => {
     const reg = await request(app)
       .post("/api/v1/auth/register")

@@ -59,13 +59,9 @@ flowchart LR
 
 3. Open the UI at **http://localhost:8080** and the API at **http://localhost:4000** (health: `GET http://localhost:4000/health`).
 
-4. Create the first **admin** user (recommended for full RBAC demo): from the repo with MongoDB reachable, set `MONGO_URI`, `SEED_ADMIN_EMAIL`, and `SEED_ADMIN_PASSWORD` (see [`.env.example`](.env.example)), then run:
+4. **Sign in:** the API creates a default **admin** on first startup (after Mongo is available). On the login page use **username `superadmin`** or **email `superadmin@prm.local`**, and password **`superadmin`**. You can still use **Register** to add normal users (`user` role). To disable the default account in production, set **`DISABLE_DEFAULT_SUPERADMIN=true`** in the environment (see [`.env.example`](.env.example)).
 
-   ```bash
-   npm run seed -w backend
-   ```
-
-   Alternatively register a normal user via the UI (`/register`); new registrations receive the **user** role.
+   Optional: `npm run seed -w backend` with `MONGO_URI`, `SEED_ADMIN_EMAIL`, and `SEED_ADMIN_PASSWORD` in `.env` creates an additional admin if you need a different email.
 
 **Compose services**: `mongo`, `api` (backend image), `web` (nginx + built SPA). API reads `MONGO_URI`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `CORS_ORIGIN`. The web image is built with `VITE_API_URL` defaulting to `http://localhost:4000` so the browser can call the API from your machine.
 
