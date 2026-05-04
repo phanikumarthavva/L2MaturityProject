@@ -1,0 +1,24 @@
+{
+  "name": "Enterprise PRM",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true
+    }
+  },
+  "postCreateCommand": "npm install",
+  "forwardPorts": [4000, 5173, 8080, 27017],
+  "portsAttributes": {
+    "4000": { "label": "API" },
+    "5173": { "label": "Vite" },
+    "8080": { "label": "Web (Docker)" },
+    "27017": { "label": "MongoDB" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
+    }
+  },
+  "remoteUser": "node"
+}

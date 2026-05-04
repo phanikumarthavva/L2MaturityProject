@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+.git
+.github
+**/.env
+**/.env.*
+**/dist
+frontend/dist
+backend/dist
+*.md
+!README.md
+coverage
+.vscode
+.cursor

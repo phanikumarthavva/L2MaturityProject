@@ -1,0 +1,61 @@
+name: Security
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (JSON report)
+        run: npm audit --json > npm-audit-report.json || true
+
+      - name: Upload npm audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: npm-audit-report.json
+
+      - name: Fail only on critical vulnerabilities
+        run: node scripts/fail-on-critical-audit.mjs npm-audit-report.json
+
+      - name: Snyk test
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: npx --yes snyk@latest test --all-projects --json-file-output=snyk-report.json
+
+      - name: Upload Snyk report
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-report
+          path: snyk-report.json
+          if-no-files-found: warn
+
+      - name: ESLint with security plugin (backend)
+        run: npm run lint -w backend -- --output-file eslint-backend-report.txt -f stylish
+
+      - name: Upload ESLint report
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eslint-backend-report
+          path: eslint-backend-report.txt
+          if-no-files-found: warn
