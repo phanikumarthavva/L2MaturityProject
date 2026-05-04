@@ -1,0 +1,17 @@
+# AWS provisions a public ELB/NLB automatically. No AWS Load Balancer Controller add-on required.
+# Find the public hostname: kubectl -n prm get svc prm-web -o wide
+apiVersion: v1
+kind: Service
+metadata:
+  name: prm-web
+  namespace: prm
+  labels:
+    app: prm-web
+spec:
+  type: LoadBalancer
+  selector:
+    app: prm-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

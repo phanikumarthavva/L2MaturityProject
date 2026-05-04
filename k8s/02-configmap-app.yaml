@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prm-app-config
+  namespace: prm
+data:
+  # After first deploy, set this to your public UI URL (http://<WEB_LB_DNS>) to tighten CORS.
+  # Until then, a broad value avoids browser blocks if anything calls the API directly.
+  cors-origin: "http://localhost:8080,http://127.0.0.1:8080"
+  jwt-expires-in: "7d"

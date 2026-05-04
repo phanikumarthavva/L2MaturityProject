@@ -1,0 +1,16 @@
+# Internal only — the UI nginx proxies /api here. No Ingress controller required.
+apiVersion: v1
+kind: Service
+metadata:
+  name: prm-api
+  namespace: prm
+  labels:
+    app: prm-api
+spec:
+  type: ClusterIP
+  selector:
+    app: prm-api
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http

@@ -1,0 +1,62 @@
+# Replace YOUR_DOCKERHUB_USER and tag as needed (or use Jenkins to patch image).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prm-api
+  namespace: prm
+  labels:
+    app: prm-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: prm-api
+  template:
+    metadata:
+      labels:
+        app: prm-api
+    spec:
+      containers:
+        - name: api
+          image: docker.io/YOUR_DOCKERHUB_USER/prm-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4000
+              name: http
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "4000"
+            - name: MONGO_URI
+              valueFrom:
+                secretKeyRef:
+                  name: prm-secrets
+                  key: mongo-uri
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: prm-secrets
+                  key: jwt-secret
+            - name: JWT_EXPIRES_IN
+              valueFrom:
+                configMapKeyRef:
+                  name: prm-app-config
+                  key: jwt-expires-in
+            - name: CORS_ORIGIN
+              valueFrom:
+                configMapKeyRef:
+                  name: prm-app-config
+                  key: cors-origin
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20

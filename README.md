@@ -199,45 +199,45 @@ This section is **documentation only**; adapt names, regions, and ARNs to your o
 
 3. Store Docker Hub credentials in Jenkins (e.g. **Username/Password** or **Secret text** credentials) and reference them by ID in the pipeline (see snippet below).
 
-### 2. AWS EKS (high level)
+### 2. AWS EKS (plain YAML, public HTTP port 80, no Helm, no Ingress add-on)
 
-1. Create an EKS cluster and node groups (for example with `eksctl`, Terraform, or the AWS console).
-2. Install a supported **ingress controller** (commonly **AWS Load Balancer Controller** for ALB/NLB ingress).
-3. Create a namespace for the app, e.g. `prm`.
-4. Store sensitive configuration in **AWS Secrets Manager** or **SSM Parameter Store**, and sync to Kubernetes **Secrets** (e.g. External Secrets Operator, CSI driver, or CI `kubectl` apply of sealed secrets). At minimum you need `MONGO_URI` (often DocumentDB or Atlas reachable from the cluster) and `JWT_SECRET`.
-5. Deploy **Deployments** and **Services** for `api` and `web`. Point the frontend build-time `VITE_API_URL` at the public URL of the API (or terminate TLS on a shared ingress host and use relative `/api` with an ingress rule).
+Concrete manifests live under [`k8s/`](k8s/) (see [`k8s/README.md`](k8s/README.md)). Summary:
 
-Example **Deployment** shape (illustrative — replace image and env references):
+1. **Create EKS + nodes** (example):
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: prm-api
-spec:
-  replicas: 2
-  selector:
-    matchLabels: { app: prm-api }
-  template:
-    metadata:
-      labels: { app: prm-api }
-    spec:
-      containers:
-        - name: api
-          image: docker.io/your-dockerhub-org/prm-api:1.0.0
-          ports: [{ containerPort: 4000 }]
-          env:
-            - name: MONGO_URI
-              valueFrom: { secretKeyRef: { name: prm-secrets, key: mongo-uri } }
-            - name: JWT_SECRET
-              valueFrom: { secretKeyRef: { name: prm-secrets, key: jwt-secret } }
-            - name: CORS_ORIGIN
-              value: "https://app.example.com"
-```
+   ```bash
+   eksctl create cluster --name prm-demo --region us-east-1 --nodes 2 --node-type t3.medium
+   aws eks update-kubeconfig --region us-east-1 --name prm-demo
+   kubectl get nodes
+   ```
+
+2. **MongoDB** must be reachable from **pod** networks (Atlas / DocumentDB / other) — not `localhost` inside the cluster.
+
+3. **Build & push** `prm-api` and `prm-web` images to Docker Hub (same Dockerfiles as Compose). Edit image names in `k8s/04-deployment-api.yaml` and `k8s/06-deployment-web.yaml`.
+
+4. **Secrets:** copy `k8s/01-secrets.example.yaml` to `k8s/secrets-local.yaml`, fill `mongo-uri` and `jwt-secret`, then `kubectl apply -f k8s/secrets-local.yaml` (that file is gitignored).
+
+5. **Apply YAML** (namespace, ConfigMaps, Deployments, Services):
+
+   ```bash
+   kubectl apply -f k8s/00-namespace.yaml
+   kubectl apply -f k8s/02-configmap-app.yaml
+   kubectl apply -f k8s/03-configmap-nginx.yaml
+   kubectl apply -f k8s/04-deployment-api.yaml
+   kubectl apply -f k8s/05-service-api.yaml
+   kubectl apply -f k8s/06-deployment-web.yaml
+   kubectl apply -f k8s/07-service-web-loadbalancer.yaml
+   ```
+
+6. **Public URL:** run `kubectl -n prm get svc prm-web` until **EXTERNAL-NAME** (or hostname) appears. Open **`http://<hostname>`** (port **80**). AWS creates an **ELB/NLB** for `Service` `type: LoadBalancer` — this is **not** the optional **AWS Load Balancer Controller** used with `Ingress` (we do not use `Ingress` here).
+
+7. **Traffic path:** Browser → **LoadBalancer:80** → **nginx** (`prm-web`) → **`/api` proxied** to **`prm-api` Service** (ClusterIP) on port 4000 inside the VPC.
+
+8. **Optional:** set `cors-origin` in `k8s/02-configmap-app.yaml` to your real `http://<elb-dns>` and `kubectl rollout restart deployment/prm-api -n prm`.
 
 ### 3. Jenkins pipeline (illustrative)
 
-Use a **Multibranch Pipeline** or **Pipeline** job with credentials bound by ID (`docker-hub`, `eks-kubeconfig`). Stages typically: checkout → `npm ci` → test → build → Docker build/push → `kubectl apply` or Helm upgrade.
+Use a **Multibranch Pipeline** or **Pipeline** job with credentials bound by ID (`docker-hub`, `eks-kubeconfig`). Stages typically: checkout → `npm ci` → test → build → Docker build/push → `kubectl set image` or `kubectl apply -f k8s/`.
 
 ```groovy
 pipeline {
@@ -279,7 +279,7 @@ pipeline {
 }
 ```
 
-For GitOps, replace the final stage with a commit to a Helm values repository or trigger Argo CD / Flux reconciliation.
+For GitOps, replace the final stage with `kubectl apply -k k8s/` (or your own manifest path) from a repo commit, or trigger Argo CD / Flux to reconcile plain YAML.
 
 ## License
 
