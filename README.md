@@ -63,7 +63,7 @@ flowchart LR
 
    Optional: `npm run seed -w backend` with `MONGO_URI`, `SEED_ADMIN_EMAIL`, and `SEED_ADMIN_PASSWORD` in `.env` creates an additional admin if you need a different email.
 
-**Compose services**: `mongo`, `api` (backend image), `web` (nginx + built SPA). API reads `MONGO_URI`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `CORS_ORIGIN`. The web image is built with `VITE_API_URL` defaulting to `http://localhost:4000` so the browser can call the API from your machine.
+**Compose services**: `mongo`, `api` (backend image), `web` (nginx + built SPA). The **web** container proxies **`/api/`** to the **api** service, so the browser uses **same-origin** requests (no CORS issues when using `http://localhost:8080` or `http://127.0.0.1:8080`). Leave **`VITE_API_URL` unset or empty** in `.env` for Compose (default). Rebuild the **web** image after changing it: `docker compose build web --no-cache`. API still listens on **4000** on the host for direct checks (`/health`).
 
 ## GitHub Codespaces
 

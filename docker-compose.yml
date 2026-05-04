@@ -26,7 +26,8 @@ services:
       MONGO_URI: mongodb://mongo:27017/prm
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      # Allow UI on localhost or 127.0.0.1 (direct API calls during dev / health checks from host).
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:4000,http://127.0.0.1:4000}
     depends_on:
       mongo:
         condition: service_healthy
@@ -35,8 +36,7 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-      args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
+      # No VITE_API_URL build-arg: SPA uses relative /api/...; nginx proxies to the api service (same-origin, no CORS).
     restart: unless-stopped
     ports:
       - "8080:80"
