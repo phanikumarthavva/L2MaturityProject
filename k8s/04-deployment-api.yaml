@@ -1,4 +1,4 @@
-# Replace YOUR_DOCKERHUB_USER and tag as needed (or use Jenkins to patch image).
+# Replace phanikumart and tag as needed (or use Jenkins to patch image).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: docker.io/YOUR_DOCKERHUB_USER/prm-api:latest
+          image: docker.io/phanikumart/prm-api:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 4000
