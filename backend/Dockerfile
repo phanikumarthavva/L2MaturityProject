@@ -21,6 +21,7 @@ COPY --from=build /app/backend/package.json ./backend/
 COPY --from=build /app/frontend/package.json ./frontend/
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/backend/dist ./backend/dist
+COPY backend/global-bundle.pem ./global-bundle.pem
 RUN groupadd -r app && useradd -r -g app app && chown -R app:app /app
 USER app
 EXPOSE 4000

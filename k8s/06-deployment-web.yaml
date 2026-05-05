@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: web
-          image: docker.io/YOUR_DOCKERHUB_USER/prm-web:latest
+          image: docker.io/phanikumart/prm-web:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 80

@@ -1,0 +1,13 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: prm-auto-cluster
+  region: ap-south-1
+  version: "1.30"
+
+autoModeConfig:
+  enabled: true
+
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
