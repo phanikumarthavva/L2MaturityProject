@@ -31,9 +31,29 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
+
         sh '''
           echo "Current commit:"
           git rev-parse --short HEAD
+        '''
+      }
+    }
+
+    stage('Fix Workspace Permissions') {
+      steps {
+        sh '''
+          echo "Fixing workspace ownership before build..."
+
+          CURRENT_UID=$(id -u)
+          CURRENT_GID=$(id -g)
+
+          docker run --rm \
+            -v "$PWD":/workspace \
+            alpine:3.20 \
+            sh -c "chown -R $CURRENT_UID:$CURRENT_GID /workspace || true"
+
+          mkdir -p .cache .tmp "$SECURITY_REPORT_DIR"
+          chmod -R u+rwX .cache .tmp "$SECURITY_REPORT_DIR"
         '''
       }
     }
@@ -113,6 +133,10 @@ pipeline {
             -t "$WEB_IMAGE:$IMAGE_TAG" \
             -t "$WEB_IMAGE:latest" \
             .
+
+          echo "Confirming local Docker images exist..."
+          docker image inspect "$API_IMAGE:$IMAGE_TAG" >/dev/null
+          docker image inspect "$WEB_IMAGE:$IMAGE_TAG" >/dev/null
         '''
       }
     }
@@ -128,9 +152,9 @@ pipeline {
           docker run --rm \
             -v "$PWD":/workspace \
             alpine:3.20 \
-            sh -c "rm -rf /workspace/$SECURITY_REPORT_DIR && mkdir -p /workspace/$SECURITY_REPORT_DIR && chown -R $CURRENT_UID:$CURRENT_GID /workspace/$SECURITY_REPORT_DIR"
+            sh -c "rm -rf /workspace/$SECURITY_REPORT_DIR /workspace/.syft-cache /workspace/.syft-tmp && mkdir -p /workspace/$SECURITY_REPORT_DIR /workspace/.syft-cache /workspace/.syft-tmp && chown -R $CURRENT_UID:$CURRENT_GID /workspace/$SECURITY_REPORT_DIR /workspace/.syft-cache /workspace/.syft-tmp"
 
-          ls -ld "$SECURITY_REPORT_DIR"
+          ls -ld "$SECURITY_REPORT_DIR" .syft-cache .syft-tmp
         '''
       }
     }
@@ -180,19 +204,23 @@ pipeline {
         sh '''
           echo "Running Checkov scan on Kubernetes manifests..."
 
-          CURRENT_UID=$(id -u)
-          CURRENT_GID=$(id -g)
-
           rm -f "$SECURITY_REPORT_DIR/checkov-k8s.json"
 
           docker run --rm \
-            --user "$CURRENT_UID:$CURRENT_GID" \
             -v "$PWD":/workspace \
             -w /workspace \
             bridgecrew/checkov:latest \
             -d /workspace/k8s \
             --framework kubernetes \
             -o json > "$SECURITY_REPORT_DIR/checkov-k8s.json" || true
+
+          CURRENT_UID=$(id -u)
+          CURRENT_GID=$(id -g)
+
+          docker run --rm \
+            -v "$PWD":/workspace \
+            alpine:3.20 \
+            sh -c "chown -R $CURRENT_UID:$CURRENT_GID /workspace/$SECURITY_REPORT_DIR"
 
           echo "Checkov scan completed."
           ls -lh "$SECURITY_REPORT_DIR/checkov-k8s.json"
@@ -209,30 +237,40 @@ pipeline {
     stage('Generate SBOM with Syft') {
       steps {
         sh '''
-          echo "Generating SBOM for API image..."
+          echo "Generating SBOM for API and Web images using local Docker daemon..."
+
+          mkdir -p .syft-cache .syft-tmp "$SECURITY_REPORT_DIR"
+
+          docker image inspect "$API_IMAGE:$IMAGE_TAG" >/dev/null
+          docker image inspect "$WEB_IMAGE:$IMAGE_TAG" >/dev/null
+
+          docker run --rm \
+            -e SYFT_CACHE_DIR=/workspace/.syft-cache \
+            -e TMPDIR=/workspace/.syft-tmp \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD":/workspace \
+            -w /workspace \
+            anchore/syft:latest \
+            "docker:$API_IMAGE:$IMAGE_TAG" \
+            -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-api.spdx.json
+
+          docker run --rm \
+            -e SYFT_CACHE_DIR=/workspace/.syft-cache \
+            -e TMPDIR=/workspace/.syft-tmp \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD":/workspace \
+            -w /workspace \
+            anchore/syft:latest \
+            "docker:$WEB_IMAGE:$IMAGE_TAG" \
+            -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-web.spdx.json
 
           CURRENT_UID=$(id -u)
           CURRENT_GID=$(id -g)
 
           docker run --rm \
-            --user "$CURRENT_UID:$CURRENT_GID" \
-            -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD":/workspace \
-            -w /workspace \
-            anchore/syft:latest \
-            "$API_IMAGE:$IMAGE_TAG" \
-            -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-api.spdx.json
-
-          echo "Generating SBOM for Web image..."
-
-          docker run --rm \
-            --user "$CURRENT_UID:$CURRENT_GID" \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD":/workspace \
-            -w /workspace \
-            anchore/syft:latest \
-            "$WEB_IMAGE:$IMAGE_TAG" \
-            -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-web.spdx.json
+            alpine:3.20 \
+            sh -c "chown -R $CURRENT_UID:$CURRENT_GID /workspace/$SECURITY_REPORT_DIR /workspace/.syft-cache /workspace/.syft-tmp"
 
           ls -lh "$SECURITY_REPORT_DIR"
         '''
@@ -812,7 +850,7 @@ EOF
         docker run --rm \
           -v "$PWD":/workspace \
           alpine:3.20 \
-          sh -c "chown -R $CURRENT_UID:$CURRENT_GID /workspace/security-reports 2>/dev/null || true"
+          sh -c "chown -R $CURRENT_UID:$CURRENT_GID /workspace/security-reports /workspace/.syft-cache /workspace/.syft-tmp 2>/dev/null || true"
 
         docker image prune -f || true
       '''
