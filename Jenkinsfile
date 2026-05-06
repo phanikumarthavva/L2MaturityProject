@@ -31,7 +31,6 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
-
         sh '''
           echo "Current commit:"
           git rev-parse --short HEAD
@@ -121,8 +120,17 @@ pipeline {
     stage('Prepare Security Reports') {
       steps {
         sh '''
-          rm -rf "$SECURITY_REPORT_DIR"
-          mkdir -p "$SECURITY_REPORT_DIR"
+          echo "Cleaning security report directory safely..."
+
+          CURRENT_UID=$(id -u)
+          CURRENT_GID=$(id -g)
+
+          docker run --rm \
+            -v "$PWD":/workspace \
+            alpine:3.20 \
+            sh -c "rm -rf /workspace/$SECURITY_REPORT_DIR && mkdir -p /workspace/$SECURITY_REPORT_DIR && chown -R $CURRENT_UID:$CURRENT_GID /workspace/$SECURITY_REPORT_DIR"
+
+          ls -ld "$SECURITY_REPORT_DIR"
         '''
       }
     }
@@ -172,10 +180,15 @@ pipeline {
         sh '''
           echo "Running Checkov scan on Kubernetes manifests..."
 
-          rm -rf "$SECURITY_REPORT_DIR/checkov-k8s.json"
+          CURRENT_UID=$(id -u)
+          CURRENT_GID=$(id -g)
+
+          rm -f "$SECURITY_REPORT_DIR/checkov-k8s.json"
 
           docker run --rm \
+            --user "$CURRENT_UID:$CURRENT_GID" \
             -v "$PWD":/workspace \
+            -w /workspace \
             bridgecrew/checkov:latest \
             -d /workspace/k8s \
             --framework kubernetes \
@@ -198,9 +211,14 @@ pipeline {
         sh '''
           echo "Generating SBOM for API image..."
 
+          CURRENT_UID=$(id -u)
+          CURRENT_GID=$(id -g)
+
           docker run --rm \
+            --user "$CURRENT_UID:$CURRENT_GID" \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD":/workspace \
+            -w /workspace \
             anchore/syft:latest \
             "$API_IMAGE:$IMAGE_TAG" \
             -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-api.spdx.json
@@ -208,8 +226,10 @@ pipeline {
           echo "Generating SBOM for Web image..."
 
           docker run --rm \
+            --user "$CURRENT_UID:$CURRENT_GID" \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD":/workspace \
+            -w /workspace \
             anchore/syft:latest \
             "$WEB_IMAGE:$IMAGE_TAG" \
             -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-web.spdx.json
@@ -785,6 +805,15 @@ EOF
     always {
       sh '''
         docker logout || true
+
+        CURRENT_UID=$(id -u)
+        CURRENT_GID=$(id -g)
+
+        docker run --rm \
+          -v "$PWD":/workspace \
+          alpine:3.20 \
+          sh -c "chown -R $CURRENT_UID:$CURRENT_GID /workspace/security-reports 2>/dev/null || true"
+
         docker image prune -f || true
       '''
     }
