@@ -19,6 +19,11 @@ pipeline {
 
     DOCDB_CLUSTER_ID = 'prm-docdb-cluster'
 
+    BEDROCK_REGION   = 'ap-south-1'
+    BEDROCK_MODEL_ID = 'anthropic.claude-3-haiku-20240307-v1:0'
+
+    SECURITY_REPORT_DIR = 'security-reports'
+
     IMAGE_TAG = "${BUILD_NUMBER}-${GIT_COMMIT}"
   }
 
@@ -110,6 +115,271 @@ pipeline {
             -t "$WEB_IMAGE:latest" \
             .
         '''
+      }
+    }
+
+    stage('Prepare Security Reports') {
+      steps {
+        sh '''
+          rm -rf "$SECURITY_REPORT_DIR"
+          mkdir -p "$SECURITY_REPORT_DIR"
+        '''
+      }
+    }
+
+    stage('Snyk Security Scan') {
+      steps {
+        withCredentials([
+          string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')
+        ]) {
+          sh '''
+            echo "Installing Snyk CLI..."
+            npm install -g snyk
+
+            snyk auth "$SNYK_TOKEN"
+
+            echo "Running Snyk dependency scan..."
+            snyk test --all-projects \
+              --json-file-output="$SECURITY_REPORT_DIR/snyk-dependencies.json" || true
+
+            echo "Running Snyk code scan..."
+            snyk code test \
+              --json-file-output="$SECURITY_REPORT_DIR/snyk-code.json" || true
+
+            echo "Running Snyk API container scan..."
+            snyk container test "$API_IMAGE:$IMAGE_TAG" \
+              --file=backend/Dockerfile \
+              --json-file-output="$SECURITY_REPORT_DIR/snyk-api-container.json" || true
+
+            echo "Running Snyk Web container scan..."
+            snyk container test "$WEB_IMAGE:$IMAGE_TAG" \
+              --file=frontend/Dockerfile \
+              --json-file-output="$SECURITY_REPORT_DIR/snyk-web-container.json" || true
+          '''
+        }
+      }
+
+      post {
+        always {
+          archiveArtifacts artifacts: 'security-reports/snyk-*.json', allowEmptyArchive: true
+        }
+      }
+    }
+
+    stage('Checkov IaC Scan') {
+      steps {
+        sh '''
+          echo "Running Checkov scan on Kubernetes manifests..."
+
+          docker run --rm \
+            -v "$PWD":/workspace \
+            bridgecrew/checkov:latest \
+            -d /workspace/k8s \
+            --framework kubernetes \
+            -o json \
+            --output-file-path /workspace/$SECURITY_REPORT_DIR/checkov-k8s.json || true
+
+          echo "Checkov scan completed."
+        '''
+      }
+
+      post {
+        always {
+          archiveArtifacts artifacts: 'security-reports/checkov-k8s.json', allowEmptyArchive: true
+        }
+      }
+    }
+
+    stage('Generate SBOM with Syft') {
+      steps {
+        sh '''
+          echo "Generating SBOM for API image..."
+
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD":/workspace \
+            anchore/syft:latest \
+            "$API_IMAGE:$IMAGE_TAG" \
+            -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-api.spdx.json
+
+          echo "Generating SBOM for Web image..."
+
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD":/workspace \
+            anchore/syft:latest \
+            "$WEB_IMAGE:$IMAGE_TAG" \
+            -o spdx-json=/workspace/$SECURITY_REPORT_DIR/sbom-web.spdx.json
+
+          ls -lh "$SECURITY_REPORT_DIR"
+        '''
+      }
+
+      post {
+        always {
+          archiveArtifacts artifacts: 'security-reports/sbom-*.spdx.json', allowEmptyArchive: true
+        }
+      }
+    }
+
+    stage('Security Gate') {
+      steps {
+        sh '''
+          echo "Running lightweight security gate..."
+
+          CRITICAL_COUNT=0
+
+          if [ -f "$SECURITY_REPORT_DIR/snyk-dependencies.json" ]; then
+            COUNT=$(grep -o '"severity":"critical"' "$SECURITY_REPORT_DIR/snyk-dependencies.json" | wc -l || true)
+            CRITICAL_COUNT=$((CRITICAL_COUNT + COUNT))
+          fi
+
+          if [ -f "$SECURITY_REPORT_DIR/snyk-api-container.json" ]; then
+            COUNT=$(grep -o '"severity":"critical"' "$SECURITY_REPORT_DIR/snyk-api-container.json" | wc -l || true)
+            CRITICAL_COUNT=$((CRITICAL_COUNT + COUNT))
+          fi
+
+          if [ -f "$SECURITY_REPORT_DIR/snyk-web-container.json" ]; then
+            COUNT=$(grep -o '"severity":"critical"' "$SECURITY_REPORT_DIR/snyk-web-container.json" | wc -l || true)
+            CRITICAL_COUNT=$((CRITICAL_COUNT + COUNT))
+          fi
+
+          echo "Critical finding count: $CRITICAL_COUNT"
+
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "Critical security findings detected. Failing build."
+            exit 1
+          fi
+
+          echo "Security gate passed."
+        '''
+      }
+    }
+
+    stage('LLM Security Review with AWS Bedrock') {
+      steps {
+        withCredentials([[
+          $class: 'AmazonWebServicesCredentialsBinding',
+          credentialsId: 'aws-bedrock-creds',
+          accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+          secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+        ]]) {
+          sh '''
+            echo "Preparing security findings for Bedrock LLM review..."
+
+            python3 <<'PY'
+import json
+from pathlib import Path
+
+report_dir = Path("security-reports")
+report_dir.mkdir(exist_ok=True)
+
+files = [
+    "snyk-dependencies.json",
+    "snyk-code.json",
+    "snyk-api-container.json",
+    "snyk-web-container.json",
+    "checkov-k8s.json",
+    "sbom-api.spdx.json",
+    "sbom-web.spdx.json",
+]
+
+combined = []
+
+for name in files:
+    path = report_dir / name
+    if not path.exists():
+        continue
+
+    text = path.read_text(errors="ignore")
+
+    if len(text) > 30000:
+        text = text[:30000] + "\\n...TRUNCATED..."
+
+    combined.append(f"\\n\\n===== {name} =====\\n{text}")
+
+prompt = f"""
+You are a senior application security reviewer.
+
+Review the following CI security scan outputs from a Jenkins pipeline.
+
+Focus on:
+1. Critical and high vulnerabilities.
+2. Exploitable dependency risks.
+3. Container image risks.
+4. Kubernetes IaC misconfigurations.
+5. Secrets exposure risk.
+6. Missing security controls.
+7. Practical remediation steps.
+
+Do not invent findings.
+If the scan data is incomplete or truncated, say so.
+Prioritize findings as: Critical, High, Medium, Low.
+
+Return a concise Markdown report with:
+- Executive summary
+- Top risks
+- Evidence from reports
+- Recommended fixes
+- Deployment recommendation: PASS, PASS_WITH_WARNINGS, or BLOCK
+
+Security reports:
+{''.join(combined)}
+"""
+
+payload = {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 4000,
+    "temperature": 0,
+    "messages": [
+        {
+            "role": "user",
+            "content": prompt
+        }
+    ]
+}
+
+Path("bedrock-security-payload.json").write_text(json.dumps(payload))
+PY
+
+            aws bedrock-runtime invoke-model \
+              --region "$BEDROCK_REGION" \
+              --model-id "$BEDROCK_MODEL_ID" \
+              --content-type "application/json" \
+              --accept "application/json" \
+              --body fileb://bedrock-security-payload.json \
+              bedrock-security-response.json
+
+            python3 <<'PY'
+import json
+from pathlib import Path
+
+response = json.loads(Path("bedrock-security-response.json").read_text())
+
+content = response.get("content", [])
+text_parts = []
+
+for item in content:
+    if item.get("type") == "text":
+        text_parts.append(item.get("text", ""))
+
+review = "\\n".join(text_parts).strip()
+
+if not review:
+    review = json.dumps(response, indent=2)
+
+Path("security-reports/llm-security-review.md").write_text(review)
+
+print(review)
+PY
+          '''
+        }
+      }
+
+      post {
+        always {
+          archiveArtifacts artifacts: 'security-reports/llm-security-review.md,bedrock-security-response.json', allowEmptyArchive: true
+        }
       }
     }
 
