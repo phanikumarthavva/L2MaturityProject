@@ -133,26 +133,27 @@ pipeline {
           string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')
         ]) {
           sh '''
-            echo "Installing Snyk CLI..."
-            npm install -g snyk
+            echo "Installing Snyk CLI locally in workspace..."
 
-            snyk auth "$SNYK_TOKEN"
+            npm install --no-save snyk
+
+            ./node_modules/.bin/snyk auth "$SNYK_TOKEN"
 
             echo "Running Snyk dependency scan..."
-            snyk test --all-projects \
+            ./node_modules/.bin/snyk test --all-projects \
               --json-file-output="$SECURITY_REPORT_DIR/snyk-dependencies.json" || true
 
             echo "Running Snyk code scan..."
-            snyk code test \
+            ./node_modules/.bin/snyk code test \
               --json-file-output="$SECURITY_REPORT_DIR/snyk-code.json" || true
 
             echo "Running Snyk API container scan..."
-            snyk container test "$API_IMAGE:$IMAGE_TAG" \
+            ./node_modules/.bin/snyk container test "$API_IMAGE:$IMAGE_TAG" \
               --file=backend/Dockerfile \
               --json-file-output="$SECURITY_REPORT_DIR/snyk-api-container.json" || true
 
             echo "Running Snyk Web container scan..."
-            snyk container test "$WEB_IMAGE:$IMAGE_TAG" \
+            ./node_modules/.bin/snyk container test "$WEB_IMAGE:$IMAGE_TAG" \
               --file=frontend/Dockerfile \
               --json-file-output="$SECURITY_REPORT_DIR/snyk-web-container.json" || true
           '''
