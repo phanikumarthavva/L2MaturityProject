@@ -326,7 +326,7 @@ pipeline {
           secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
         ]]) {
           sh '''
-            echo "Preparing security findings for Bedrock LLM review..."
+            echo "Preparing compact security findings for Bedrock LLM review..."
 
             python3 <<'PY'
 import json
@@ -334,6 +334,9 @@ from pathlib import Path
 
 report_dir = Path("security-reports")
 report_dir.mkdir(exist_ok=True)
+
+MAX_TOTAL_CHARS = 45000
+MAX_FILE_CHARS = 7000
 
 files = [
     "snyk-dependencies.json",
@@ -345,7 +348,100 @@ files = [
     "sbom-web.spdx.json",
 ]
 
-combined = []
+def safe_load_json(path):
+    try:
+        return json.loads(path.read_text(errors="ignore"))
+    except Exception:
+        return None
+
+def truncate(text, limit):
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\\n...TRUNCATED..."
+
+def summarize_snyk(data, name):
+    findings = []
+
+    if isinstance(data, dict):
+        vulns = data.get("vulnerabilities") or data.get("issues") or []
+
+        if isinstance(vulns, list):
+            for v in vulns[:40]:
+                if not isinstance(v, dict):
+                    continue
+
+                findings.append({
+                    "id": v.get("id") or v.get("issueId"),
+                    "title": v.get("title") or v.get("message"),
+                    "severity": v.get("severity"),
+                    "package": v.get("packageName") or v.get("pkgName"),
+                    "version": v.get("version"),
+                    "fixedIn": v.get("fixedIn") or v.get("nearestFixedInVersion"),
+                    "from": v.get("from")
+                })
+
+    return {
+        "report": name,
+        "type": "snyk",
+        "finding_count_sampled": len(findings),
+        "findings": findings
+    }
+
+def summarize_checkov(data, name):
+    failed = []
+
+    if isinstance(data, dict):
+        results = data.get("results", {})
+        checks = results.get("failed_checks", [])
+
+        if isinstance(checks, list):
+            for c in checks[:50]:
+                if not isinstance(c, dict):
+                    continue
+
+                failed.append({
+                    "check_id": c.get("check_id"),
+                    "check_name": c.get("check_name"),
+                    "severity": c.get("severity"),
+                    "file_path": c.get("file_path"),
+                    "resource": c.get("resource"),
+                    "guideline": c.get("guideline")
+                })
+
+    return {
+        "report": name,
+        "type": "checkov",
+        "failed_check_count_sampled": len(failed),
+        "failed_checks": failed
+    }
+
+def summarize_sbom(data, name):
+    packages = []
+
+    if isinstance(data, dict):
+        pkgs = data.get("packages", [])
+
+        if isinstance(pkgs, list):
+            for p in pkgs[:80]:
+                if not isinstance(p, dict):
+                    continue
+
+                packages.append({
+                    "name": p.get("name"),
+                    "versionInfo": p.get("versionInfo"),
+                    "supplier": p.get("supplier")
+                })
+
+    return {
+        "report": name,
+        "type": "sbom",
+        "package_count_sampled": len(packages),
+        "packages_sample": packages
+    }
+
+summaries = []
 
 for name in files:
     path = report_dir / name
@@ -353,22 +449,37 @@ for name in files:
     if not path.exists() or not path.is_file():
         continue
 
-    text = path.read_text(errors="ignore")
+    data = safe_load_json(path)
 
-    if len(text) > 30000:
-        text = text[:30000] + "\\n...TRUNCATED..."
+    if data is None:
+        raw = truncate(path.read_text(errors="ignore"), MAX_FILE_CHARS)
+        summaries.append({
+            "report": name,
+            "type": "raw",
+            "content": raw
+        })
+        continue
 
-    combined.append(f"\\n\\n===== {name} =====\\n{text}")
+    if name.startswith("snyk"):
+        summaries.append(summarize_snyk(data, name))
+    elif name.startswith("checkov"):
+        summaries.append(summarize_checkov(data, name))
+    elif name.startswith("sbom"):
+        summaries.append(summarize_sbom(data, name))
 
-if not combined:
-    combined.append("No readable security report files were found. The scan outputs may be missing or empty.")
+summary_text = json.dumps(summaries, indent=2)
+
+if len(summary_text) > MAX_TOTAL_CHARS:
+    summary_text = summary_text[:MAX_TOTAL_CHARS] + "\\n...TRUNCATED_TOTAL_INPUT..."
 
 prompt = f"""
 You are a senior application security reviewer.
 
-Review the following CI security scan outputs from a Jenkins pipeline.
+Review this compact summary of CI security scan outputs from Jenkins.
 
-Focus on:
+Focus only on evidence present in the provided summaries.
+
+Review areas:
 1. Critical and high vulnerabilities.
 2. Exploitable dependency risks.
 3. Container image risks.
@@ -378,23 +489,25 @@ Focus on:
 7. Practical remediation steps.
 
 Do not invent findings.
-If the scan data is incomplete, missing, empty, or truncated, say so.
-Prioritize findings as: Critical, High, Medium, Low.
+If scan data is incomplete, sampled, missing, or truncated, say so clearly.
 
 Return a concise Markdown report with:
 - Executive summary
-- Top risks
-- Evidence from reports
+- Critical findings
+- High findings
+- Medium findings
+- Kubernetes/IaC concerns
+- SBOM observations
 - Recommended fixes
 - Deployment recommendation: PASS, PASS_WITH_WARNINGS, or BLOCK
 
-Security reports:
-{''.join(combined)}
+Security scan summary:
+{summary_text}
 """
 
 payload = {
     "anthropic_version": "bedrock-2023-05-31",
-    "max_tokens": 4000,
+    "max_tokens": 2500,
     "temperature": 0,
     "messages": [
         {
@@ -405,6 +518,7 @@ payload = {
 }
 
 Path("bedrock-security-payload.json").write_text(json.dumps(payload))
+Path("security-reports/bedrock-security-input-summary.json").write_text(summary_text)
 PY
 
             aws bedrock-runtime invoke-model \
@@ -443,7 +557,7 @@ PY
 
       post {
         always {
-          archiveArtifacts artifacts: 'security-reports/llm-security-review.md,bedrock-security-response.json', allowEmptyArchive: true
+          archiveArtifacts artifacts: 'security-reports/llm-security-review.md,security-reports/bedrock-security-input-summary.json,bedrock-security-response.json', allowEmptyArchive: true
         }
       }
     }
