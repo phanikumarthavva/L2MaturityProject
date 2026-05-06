@@ -172,15 +172,17 @@ pipeline {
         sh '''
           echo "Running Checkov scan on Kubernetes manifests..."
 
+          rm -rf "$SECURITY_REPORT_DIR/checkov-k8s.json"
+
           docker run --rm \
             -v "$PWD":/workspace \
             bridgecrew/checkov:latest \
             -d /workspace/k8s \
             --framework kubernetes \
-            -o json \
-            --output-file-path /workspace/$SECURITY_REPORT_DIR/checkov-k8s.json || true
+            -o json > "$SECURITY_REPORT_DIR/checkov-k8s.json" || true
 
           echo "Checkov scan completed."
+          ls -lh "$SECURITY_REPORT_DIR/checkov-k8s.json"
         '''
       }
 
@@ -289,7 +291,8 @@ combined = []
 
 for name in files:
     path = report_dir / name
-    if not path.exists():
+
+    if not path.exists() or not path.is_file():
         continue
 
     text = path.read_text(errors="ignore")
@@ -298,6 +301,9 @@ for name in files:
         text = text[:30000] + "\\n...TRUNCATED..."
 
     combined.append(f"\\n\\n===== {name} =====\\n{text}")
+
+if not combined:
+    combined.append("No readable security report files were found. The scan outputs may be missing or empty.")
 
 prompt = f"""
 You are a senior application security reviewer.
@@ -314,7 +320,7 @@ Focus on:
 7. Practical remediation steps.
 
 Do not invent findings.
-If the scan data is incomplete or truncated, say so.
+If the scan data is incomplete, missing, empty, or truncated, say so.
 Prioritize findings as: Critical, High, Medium, Low.
 
 Return a concise Markdown report with:
